@@ -1,6 +1,0 @@
-# Features
-* export full volumes from bacula to mailslots
-* import mailslots to free to bacula and label unlabeled volumes
-
-# Requirements
-* uses mtx-changer script (included with bacula)
