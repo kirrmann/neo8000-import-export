@@ -78,7 +78,7 @@ check_running_pids() {
 }
 
 usage() {
-    echo 'usage: $0 [options] (--import|--export)'
+    echo "usage: $0 [options] (--import|--export)"
     echo
     echo '    --import    - start import to bacula from mailslots'
     echo '    --export    - start export to bacula from mailslots'
@@ -145,8 +145,6 @@ if [[ $option == 'import' ]]; then
             xargs -n $c | \
             tr ' ' ','))
         d=0
-        p=0
-        queue_finished=0
         pids=()
         echo "redirecting output to /tmp/import-{0,1,2,3}.log"
         for t in ${newtapes[@]}; do
@@ -156,14 +154,12 @@ if [[ $option == 'import' ]]; then
             bconsole_import &
             pids[$d] = $!
             ((d++))
-            ((p++))
         done
 
         while [ "${#pids[*]}" -gt 0 ]; do
             check_pids
-            echo "Waiting for completed label jobs (done $queue_finished from $d)"
-            sleep 5
-            # FIXME won't work, $queue_finished always 0 ... try pidof and save PIDs
+            echo -ne 'Waiting for completed label jobs ('"${#pids[*]}"' running)\r'
+            sleep 1
             exit 0
         done
     fi
