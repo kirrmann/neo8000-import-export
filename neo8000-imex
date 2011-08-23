@@ -122,13 +122,22 @@ if [[ $option == 'import' ]]; then
         jobqueue=2
     fi
     jobsdone=1
+    maxslots=0
     echo "Empty slots found: ${#emptyslots[*]}"
     echo "Mailslots used ${#mailslots[*]} from 15"
+
+    if [ "${#emptyslots[*]}" -lt "${#mailslots[*]}" ]; then
+        echo "WARNING: not enough free slots (free slots: ${#emptyslots[*]}, mailslots: ${#mailslots[*]})"
+        maxslots=${#emptyslots[*]}
+    else
+        maxslots=${#mailslots[*]}
+    fi
 
     echo_f "starting transfer"
     ((jobsdone++))
     mindex=0
     for e in ${emptyslots[@]}; do
+        [[ $mindex -gt $maxslots ]] && break
         transfer=$(($mindex+1))
         echo "($transfer/$transfers) moving tape from ${mailslots[$mindex]} to $e"
         $mtxchanger $storage transfer ${mailslots[$mindex]} $e
