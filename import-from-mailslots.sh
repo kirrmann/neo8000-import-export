@@ -37,10 +37,11 @@ done
 
 echo_f "updating bacula volume names"
 ((jobsdone++))
+c=`chunks`
 newtapes=($(echo "update slots drive=0" | bconsole -s -n | \
 	grep 'not found in catalog' | \
 	sed 's/.*Slot=\([0-9]\+\).*/\1/g' | \
-	xargs -n 4 | \
+	xargs -n $c | \
 	tr ' ' ','))
 d=0
 p=0

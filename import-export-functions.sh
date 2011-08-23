@@ -1,6 +1,7 @@
 #!/bin/bash
 
 trim() { echo $1|sed 's/^\s\+\|\s\+$//g'; }
+chunks() { echo "${#mailslots[*]} / ${#drives[*]}" | bc -l | xargs printf '%1.0f'; }
 bacula_exec() { echo "$@" | bconsole -s -n > /dev/null; }
 bacula_check_running() {
         running=$(echo "list jobs" | bconsole -s -n | grep R | awk -F\| '{print $9}' | grep R)
