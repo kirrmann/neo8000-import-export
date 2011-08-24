@@ -12,10 +12,6 @@ trim() {
     echo $1|sed 's/^\s\+\|\s\+$//g';
 }
 
-chunks() {
-    echo "${#mailslots[*]} / ${#drives[*]}" | bc -l | xargs printf '%1.0f';
-}
-
 bacula_exec() {
     echo "$@" | bconsole -s -n > /dev/null;
 }
@@ -40,7 +36,7 @@ echo_f() {
 
 bconsole_import() {
         bconsole << END_OF_DATA
-@output /tmp/import-$d.log
+@output /tmp/import-drive-$d.log
 @time
 label barcodes slots=$t drive=$d pool=${pools[$p]}
 yes
@@ -53,7 +49,7 @@ END_OF_DATA
 }
 
 unmount_drives() {
-    echo_f "unmouting drives"
+    echo_f "unmounting drives"
     ((jobsdone++))
     for d in ${drives[@]}; do
         echo "unmounting drive-$d"
@@ -61,11 +57,20 @@ unmount_drives() {
     done
 }
 
+mount_drives() {
+    echo_f "mounting drives"
+    ((jobsdone++))
+    for d in ${drives[@]}; do
+        echo "mounting drive-$d"
+        bacula_exec "mount drive=$d slot="
+    done
+}
+
 calc_transfers() {
-    if [ ${#fullslots[*]} -gt ${#emptymailslots[*]} ]; then
-        transfers=${#emptymailslots[*]}
+    if [ ${#1[*]} -gt ${#2[*]} ]; then
+        transfers=${#2[*]}
     else
-        transfers=${#fullslots[*]}
+        transfers=${#1[*]}
     fi
 }
 
@@ -107,47 +112,61 @@ done
 
 bacula_check_running
 
-if [[ $option == 'import' ]]; then
+if [[ $option == 'import' -o $label -gt 0 ]]; then
     unmount_drives
 
     declare -a emptyslots=($($mtxchanger $storage listall | grep '^S:.*:E$' | awk -F: '{print $2}'))
     declare -a mailslots=($($mtxchanger $storage listall | grep '^I:.*:F:' | awk -F: '{print $2}'))
 
-    calc_transfers
+    calc_transfers $mailslots $emptymailslots
 
-    echo_f "statistics"
-    if [ $label -gt 0 ]; then
+    if [[ $option == 'import' -a $label -gt 0 ]]; then
         jobqueue=3
     else
         jobqueue=2
     fi
     jobsdone=1
     maxslots=0
-    echo "Empty slots found: ${#emptyslots[*]}"
-    echo "Mailslots used ${#mailslots[*]} from 15"
+    if [[ $option == 'import' ]]; then
+        echo_f "statistics"
+        echo "Empty slots found: ${#emptyslots[*]}"
+        echo "Mailslots used ${#mailslots[*]} from 15"
 
-    if [ "${#emptyslots[*]}" -lt "${#mailslots[*]}" ]; then
-        echo "WARNING: not enough free slots (free slots: ${#emptyslots[*]}, mailslots: ${#mailslots[*]})"
-        maxslots=${#emptyslots[*]}
-    else
-        maxslots=${#mailslots[*]}
+        if [ "${#emptyslots[*]}" -lt "${#mailslots[*]}" ]; then
+            echo "WARNING: not enough free slots (free slots: ${#emptyslots[*]}, mailslots: ${#mailslots[*]})"
+            maxslots=${#emptyslots[*]}
+        else
+            maxslots=${#mailslots[*]}
+        fi
+
+        echo_f "starting transfer"
+        ((jobsdone++))
+        mindex=0
+        for e in ${emptyslots[@]}; do
+            [[ $mindex -gt $maxslots ]] && break
+            transfer=$(($mindex+1))
+            echo "($transfer/$transfers) moving tape from ${mailslots[$mindex]} to $e"
+            $mtxchanger $storage transfer ${mailslots[$mindex]} $e
+            ((mindex++))
+        done
     fi
-
-    echo_f "starting transfer"
-    ((jobsdone++))
-    mindex=0
-    for e in ${emptyslots[@]}; do
-        [[ $mindex -gt $maxslots ]] && break
-        transfer=$(($mindex+1))
-        echo "($transfer/$transfers) moving tape from ${mailslots[$mindex]} to $e"
-        $mtxchanger $storage transfer ${mailslots[$mindex]} $e
-        ((mindex++))
-    done
 
     if [ $label -gt 0 ]; then
         echo_f "updating bacula volume names"
         ((jobsdone++))
-        c=`chunks`
+        chunks=()
+        ci=0
+        rest=((${#mailslots[*]} % ${#drives[*]}))
+        for drive in ${#drives[@]}; do
+            div=`echo "${#mailslots[*]} / ${#drives[*]}" | bc -l | xargs printf '%1.0f'`
+            if [ $ci -eq ${#drives[*]} ]; then
+                chunks[$ci]=(($div+$rest))
+            else
+                chunks[$ci]=$div
+            fi
+            ((ci++))
+        done
+
         newtapes=($(echo "update slots drive=0" | bconsole -s -n | \
             grep 'not found in catalog' | \
             sed 's/.*Slot=\([0-9]\+\).*/\1/g' | \
@@ -155,14 +174,15 @@ if [[ $option == 'import' ]]; then
             tr ' ' ','))
         d=0
         pids=()
-        echo "redirecting output to /tmp/import-{0,1,2,3}.log"
+        echo "redirecting output to /tmp/import-drive-{0,1,2,3}.log"
         for t in ${newtapes[@]}; do
             touch /tmp/import-drive-$d.log
 
             echo "* Started import to bacula pool=${pools[$p]} with drive=$d"
             bconsole_import &
-            pids[$d] = $!
+            pids[$d]=$!
             ((d++))
+            [[ $d -gt $d ]] && break
         done
 
         while [ "${#pids[*]}" -gt 0 ]; do
@@ -173,11 +193,15 @@ if [[ $option == 'import' ]]; then
         done
     fi
 
-    echo_f "import finished"
+    if [[ $option == 'import' ]]; then
+        echo_f "import finished"
+    else
+        echo_f "labeling finished"
+    fi
 fi
 
 if [[ $option == 'export' ]]; then
-    jobqueue=3
+    jobqueue=4
     jobsdone=1
     full_volume_query="SELECT volumename,slot FROM media WHERE inchanger=1 AND volstatus='Full' ORDER BY lastwritten"
 
@@ -190,7 +214,7 @@ if [[ $option == 'export' ]]; then
         declare -a emptymailslots=($($mtxchanger $storage listall | grep '^I:.*:E$' | awk -F: '{print $2}'))
     }
 
-    calc_transfers
+    calc_transfers $fullslots $emptymailslots
 
     echo_f "statistics"
     echo "Full slots: ${#fullslots[*]}"
@@ -210,6 +234,8 @@ if [[ $option == 'export' ]]; then
         [[ $fvindex -gt ${#emptymailslots[*]} ]] && break
         ((fvindex++))
     done
+
+    mount_drives
 
     echo_f "export finished"
 fi
