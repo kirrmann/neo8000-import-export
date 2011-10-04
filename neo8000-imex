@@ -6,20 +6,44 @@ transfers=0
 label=0
 option=""
 pools=(Inc Full Diff Inc)
-
+lockfile=/tmp/$0.lock
+check_running=1
+curpid=$$
 
 trim() {
     echo $1|sed 's/^\s\+\|\s\+$//g';
 }
 
+unlock() {
+    rm -f $lockfile
+}
+
+lock() {
+    if [ -f $lockfile ]; then
+        lastpid=$(<$lockfile)
+        ps -p $lastpid
+        if [ $? -eq 0 ]; then
+            echo "ERROR: Script is already running!"
+            exit 3
+        else
+            unlock
+        fi
+    fi
+    echo $curpid > $lockfile
+}
+
+lock
+exit 1
+
 bacula_exec() {
     echo "$@" | bconsole -s -n > /dev/null;
 }
 
+# http://wiki.bacula.org/doku.php?id=faq#what_do_all_those_job_status_codes_mean
 bacula_check_running() {
-    running=$(echo "list jobs" | bconsole -s -n | grep R | awk -F\| '{print $9}' | grep R)
+    running=$(echo "list jobs" | bconsole -s -n | tail -n 100 | awk -F\| '{print $9}' | sed -e 's/\s//g' | egrep 'R|C|F|j|M|m|p|c')
     if [ -n "$running" ]; then
-        echo "Bacula has currently running jobs, aborting!"
+        echo "ERROR: Bacula has currently running jobs, aborting!"
         exit 1
     fi
 }
@@ -67,17 +91,17 @@ mount_drives() {
 }
 
 calc_transfers() {
-    if [ ${#1[*]} -gt ${#2[*]} ]; then
-        transfers=${#2[*]}
+    if [ $1 -lt $2 ]; then
+        transfers=$1
     else
-        transfers=${#1[*]}
+        transfers=$2
     fi
 }
 
 check_running_pids() {
-    for p in ${pids[@]}; do
-        if [ -z "`ps a | awk '{print $1}' | grep $p`" ]; then
-            unset pids[$p]
+    for pid in ${pids[@]}; do
+        if [ -z "`ps a | awk '{print $1}' | grep $pid`" ]; then
+            unset pids[$pid]
         fi
     done
 }
@@ -88,6 +112,7 @@ usage() {
     echo '    --import    - start import to bacula from mailslots'
     echo '    --export    - start export to bacula from mailslots'
     echo '    --label     - label volumes after import'
+    echo '    --no-check  - skip check for running or waiting bacula jobs'
     echo '    -s          - path to storage device'
     echo '    -m          - path to mtx-changer script'
     echo '    -h          - outputs this message'
@@ -102,6 +127,7 @@ while [[ $1 ]]; do
         '--import') option="import" ;;
         '--export') option="export" ;;
         '--label') label=1 ;;
+        '--no-check') check_running=0 ;;
         '-h'|'--help') usage ;;
         '-m') mtxchanger="$2" ;;
         -*) echo "$0: Option \`$1' is not valid." ; exit 5 ;;
@@ -110,17 +136,20 @@ while [[ $1 ]]; do
     shift
 done
 
-bacula_check_running
+if [ $check_running -ne 0 ]; then
+    bacula_check_running
+fi
+lock
 
-if [[ $option == 'import' -o $label -gt 0 ]]; then
+if [[ $option == 'import' || $label -gt 0 ]]; then
     unmount_drives
 
     declare -a emptyslots=($($mtxchanger $storage listall | grep '^S:.*:E$' | awk -F: '{print $2}'))
     declare -a mailslots=($($mtxchanger $storage listall | grep '^I:.*:F:' | awk -F: '{print $2}'))
 
-    calc_transfers $mailslots $emptymailslots
+    calc_transfers ${#mailslots[*]} ${#emptyslots[*]}
 
-    if [[ $option == 'import' -a $label -gt 0 ]]; then
+    if [[ $option == 'import' && $label -gt 0 ]]; then
         jobqueue=3
     else
         jobqueue=2
@@ -143,7 +172,7 @@ if [[ $option == 'import' -o $label -gt 0 ]]; then
         ((jobsdone++))
         mindex=0
         for e in ${emptyslots[@]}; do
-            [[ $mindex -gt $maxslots ]] && break
+            [[ $mindex -eq $maxslots ]] && break
             transfer=$(($mindex+1))
             echo "($transfer/$transfers) moving tape from ${mailslots[$mindex]} to $e"
             $mtxchanger $storage transfer ${mailslots[$mindex]} $e
@@ -154,25 +183,30 @@ if [[ $option == 'import' -o $label -gt 0 ]]; then
     if [ $label -gt 0 ]; then
         echo_f "updating bacula volume names"
         ((jobsdone++))
+        unlabeled=($(echo "update slots drive=0" | bconsole -s -n | \
+            grep 'not found in catalog' | \
+            sed 's/.*Slot=\([0-9]\+\).*/\1/g'))
         chunks=()
         ci=0
-        rest=((${#mailslots[*]} % ${#drives[*]}))
-        for drive in ${#drives[@]}; do
-            div=`echo "${#mailslots[*]} / ${#drives[*]}" | bc -l | xargs printf '%1.0f'`
+        rest=`((${#unlabeled[*]} % ${#drives[*]}))`
+        for drive in ${drives[@]}; do
+            div=`echo "${#unlabeled[*]} / ${#drives[*]}" | bc -l | xargs printf '%1.0f'`
             if [ $ci -eq ${#drives[*]} ]; then
-                chunks[$ci]=(($div+$rest))
+                chunks[$ci]=`(($div+$rest))`
             else
                 chunks[$ci]=$div
             fi
             ((ci++))
         done
 
+	# FIXME no correct handling for chunks
         newtapes=($(echo "update slots drive=0" | bconsole -s -n | \
             grep 'not found in catalog' | \
             sed 's/.*Slot=\([0-9]\+\).*/\1/g' | \
-            xargs -n $c | \
+            xargs -n 4 | \
             tr ' ' ','))
         d=0
+	p=0
         pids=()
         echo "redirecting output to /tmp/import-drive-{0,1,2,3}.log"
         for t in ${newtapes[@]}; do
@@ -182,11 +216,13 @@ if [[ $option == 'import' -o $label -gt 0 ]]; then
             bconsole_import &
             pids[$d]=$!
             ((d++))
+            ((p++))
             [[ $d -gt $d ]] && break
         done
 
+	sleep 5
         while [ "${#pids[*]}" -gt 0 ]; do
-            check_pids
+            check_running_pids
             echo -ne 'Waiting for completed label jobs ('"${#pids[*]}"' running)\r'
             sleep 1
             exit 0
@@ -214,7 +250,7 @@ if [[ $option == 'export' ]]; then
         declare -a emptymailslots=($($mtxchanger $storage listall | grep '^I:.*:E$' | awk -F: '{print $2}'))
     }
 
-    calc_transfers $fullslots $emptymailslots
+    calc_transfers ${#fullslots[*]} ${#emptymailslots[*]}
 
     echo_f "statistics"
     echo "Full slots: ${#fullslots[*]}"
@@ -239,3 +275,5 @@ if [[ $option == 'export' ]]; then
 
     echo_f "export finished"
 fi
+
+unlock
