@@ -101,14 +101,6 @@ calc_transfers() {
     fi
 }
 
-check_running_pids() {
-    for pid in ${pids[@]}; do
-        if [ -z "`ps a | awk '{print $1}' | grep $pid`" ]; then
-            unset pids[$pid]
-        fi
-    done
-}
-
 usage() {
     echo "usage: $0 [options] (--import|--export)"
     echo
@@ -126,14 +118,15 @@ usage() {
 [[ $1 ]] || usage
 while [[ $1 ]]; do
     case "$1" in
-        '-s') storage="$2" ;;
-        '--import') option="import" ;;
-        '--export') option="export" ;;
-        '--label') label=1 ;;
-        '--no-check') check_running=0 ;;
-        '-h'|'--help') usage ;;
-        '-m') mtxchanger="$2" ;;
-        -*) echo "$0: Option \`$1' is not valid." ; exit 5 ;;
+        '-s')          storage="$2"    ;;
+        '--import')    option="import" ;;
+        '--export')    option="export" ;;
+        '--pools')     pools=($2)      ;;
+        '--label')     label=1         ;;
+        '--no-check')  check_running=0 ;;
+        '-h'|'--help') usage           ;;
+        '-m')          mtxchanger="$2" ;;
+        -*)            echo "$0: Option \`$1' is not valid." ; exit 5 ;;
         *) ;;
     esac
     shift
@@ -211,27 +204,25 @@ if [[ $option == 'import' || $label -gt 0 ]]; then
             tr ' ' ','))
         d=0
 	p=0
-        pids=()
         echo "redirecting output to /tmp/import-drive-{0,1,2,3}.log"
         for t in ${newtapes[@]}; do
             touch /tmp/import-drive-$d.log
 
             echo "* Started import to bacula pool=${pools[$p]} with drive=$d"
             bconsole_import &
-            pids[$d]=$!
             ((d++))
             ((p++))
+            if [ $p -ge ${#pools[*]} ]; then
+                p=0
+            fi
             [[ $d -gt $d ]] && break
         done
 
-	sleep 5
-        while [ "${#pids[*]}" -gt 0 ]; do
-            check_running_pids
-            echo -ne 'Waiting for completed label jobs ('"${#pids[*]}"' running)\r'
-            sleep 1
-            exit 0
-        done
+    	echo 'Waiting for completed label jobs'
+	wait
     fi
+
+    update_bacula
 
     if [[ $option == 'import' ]]; then
         echo_f "import finished"
@@ -277,6 +268,8 @@ if [[ $option == 'export' ]]; then
     done
 
     mount_drives
+
+    update_bacula
 
     echo_f "export finished"
 fi
