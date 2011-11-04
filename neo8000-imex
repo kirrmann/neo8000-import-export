@@ -32,9 +32,6 @@ lock() {
     echo $curpid > $lockfile
 }
 
-lock
-exit 1
-
 bacula_exec() {
     echo "$@" | bconsole -s -n > /dev/null;
 }
@@ -90,6 +87,12 @@ mount_drives() {
     done
 }
 
+update_bacula() {
+    echo_f "updating bacula"
+    bacula_exec "update slots"
+    echo "done!"
+}
+
 calc_transfers() {
     if [ $1 -lt $2 ]; then
         transfers=$1
@@ -142,6 +145,7 @@ fi
 lock
 
 if [[ $option == 'import' || $label -gt 0 ]]; then
+    update_bacula
     unmount_drives
 
     declare -a emptyslots=($($mtxchanger $storage listall | grep '^S:.*:E$' | awk -F: '{print $2}'))
@@ -241,6 +245,7 @@ if [[ $option == 'export' ]]; then
     jobsdone=1
     full_volume_query="SELECT volumename,slot FROM media WHERE inchanger=1 AND volstatus='Full' ORDER BY lastwritten"
 
+    update_bacula
     unmount_drives
 
     {
