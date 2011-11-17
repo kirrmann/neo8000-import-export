@@ -55,6 +55,17 @@ echo_f() {
 	fi
 }
 
+bconsole_update_retention() {
+    echo_f "updating volumes retention"
+        bconsole << END_OF_DATA
+update volume
+14
+wait
+quit
+END_OF_DATA
+    echo "done!"
+}
+
 bconsole_import() {
         bconsole << END_OF_DATA
 @output /tmp/import-drive-$d.log
@@ -69,7 +80,7 @@ END_OF_DATA
 	((queue_finished++))
 }
 
-unmount_drives() {
+bacula_unmount_drives() {
     echo_f "unmounting drives"
     ((jobsdone++))
     for d in ${drives[@]}; do
@@ -78,7 +89,7 @@ unmount_drives() {
     done
 }
 
-mount_drives() {
+bacula_mount_drives() {
     echo_f "mounting drives"
     ((jobsdone++))
     for d in ${drives[@]}; do
@@ -87,7 +98,7 @@ mount_drives() {
     done
 }
 
-update_bacula() {
+bacula_update() {
     echo_f "updating bacula"
     bacula_exec "update slots"
     echo "done!"
@@ -138,8 +149,8 @@ fi
 lock
 
 if [[ $option == 'import' || $label -gt 0 ]]; then
-    update_bacula
-    unmount_drives
+    bacula_update
+    bacula_unmount_drives
 
     declare -a emptyslots=($($mtxchanger $storage listall | grep '^S:.*:E$' | awk -F: '{print $2}'))
     declare -a mailslots=($($mtxchanger $storage listall | grep '^I:.*:F:' | awk -F: '{print $2}'))
@@ -222,7 +233,9 @@ if [[ $option == 'import' || $label -gt 0 ]]; then
 	wait
     fi
 
-    update_bacula
+    bacula_update
+
+    bconsole_update_retention
 
     if [[ $option == 'import' ]]; then
         echo_f "import finished"
@@ -236,8 +249,8 @@ if [[ $option == 'export' ]]; then
     jobsdone=1
     full_volume_query="SELECT volumename,slot FROM media WHERE inchanger=1 AND volstatus='Full' ORDER BY lastwritten"
 
-    update_bacula
-    unmount_drives
+    bacula_update
+    bacula_unmount_drives
 
     {
         IFS=$'\n'
@@ -267,9 +280,9 @@ if [[ $option == 'export' ]]; then
         ((fvindex++))
     done
 
-    mount_drives
+    bacula_mount_drives
 
-    update_bacula
+    bacula_update
 
     echo_f "export finished"
 fi
