@@ -57,7 +57,8 @@ echo_f() {
 
 bconsole_update_retention() {
     echo_f "updating volumes retention"
-        bconsole << END_OF_DATA
+    bconsole << END_OF_DATA
+@output /dev/null
 update volume
 14
 wait
@@ -67,7 +68,7 @@ END_OF_DATA
 }
 
 bconsole_import() {
-        bconsole << END_OF_DATA
+    bconsole << END_OF_DATA
 @output /tmp/import-drive-$d.log
 @time
 label barcodes slots=$t drive=$d pool=${pools[$p]}
