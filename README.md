@@ -1,3 +1,6 @@
+Script to import, export and label tapes to and from bacula (only tested with Overland Neo 8000).
+
+
 Features
 --------
 
