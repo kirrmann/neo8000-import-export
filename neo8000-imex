@@ -2,6 +2,11 @@
 
 source "neo8000-imex.conf" || exit 1
 
+if [[ -z "$storage" ]]; then
+    echo "ERROR: \$storage isn't set"
+    exit 2
+fi
+
 transfers=0
 label=0
 option=""
