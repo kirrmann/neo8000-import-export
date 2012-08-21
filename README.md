@@ -12,3 +12,4 @@ Requirements
 
 1. uses mtx-changer script (included with bacula)
 2. needs the `bc` command
+3. Python3 (optional)
